@@ -10,6 +10,7 @@ import org.bukkit.Location;
 import org.bukkit.entity.Entity;
 import org.jetbrains.annotations.NotNull;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -27,7 +28,7 @@ public final class EntitiesGetter {
 
     public static void handleEntitySpawn(Entity entity) {
         ChunkPosition chunkPosition = new ChunkPosition(entity.getLocation());
-        entitiesCache.get(chunkPosition).add(entity);
+        entitiesCache.get(chunkPosition).add(new WeakReference<>(entity));
     }
 
     public static Stream<Entity> getNearbyEntities(Location location, int range, Predicate<Entity> filter) {
@@ -52,7 +53,10 @@ public final class EntitiesGetter {
 
         for (int x = minChunkX; x <= maxChunkX; x++) {
             for (int z = minChunkZ; z <= maxChunkZ; z++) {
-                entities.addAll(entitiesCache.get(new ChunkPosition(worldName, x, z)));
+                for (WeakReference<Entity> ref : entitiesCache.get(new ChunkPosition(worldName, x, z))) {
+                    Entity entity = ref.get();
+                    if (entity != null) entities.add(entity);
+                }
             }
         }
 
@@ -72,26 +76,30 @@ public final class EntitiesGetter {
     private static EntitiesCache initializeCache() {
         if (ServerVersion.isAtLeast(ServerVersion.v1_8)) {
             return new EntitiesCache() {
-                private final LoadingCache<ChunkPosition, Collection<Entity>> entitiesCache = CacheBuilder.newBuilder()
+                private final LoadingCache<ChunkPosition, Collection<WeakReference<Entity>>> entitiesCache = CacheBuilder.newBuilder()
                         .expireAfterWrite(5, TimeUnit.SECONDS)
-                        .build(new CacheLoader<ChunkPosition, Collection<Entity>>() {
+                        .build(new CacheLoader<ChunkPosition, Collection<WeakReference<Entity>>>() {
                             @Override
-                            public Collection<Entity> load(@NotNull ChunkPosition chunkPosition) {
-                                return plugin.getNMSWorld().getEntitiesAtChunk(chunkPosition);
+                            public Collection<WeakReference<Entity>> load(@NotNull ChunkPosition chunkPosition) {
+                                Collection<WeakReference<Entity>> weakEntities = new ArrayList<>();
+                                for (Entity entity : plugin.getNMSWorld().getEntitiesAtChunk(chunkPosition)) {
+                                    weakEntities.add(new WeakReference<>(entity));
+                                }
+                                return weakEntities;
                             }
                         });
 
                 @Override
-                public Collection<Entity> get(ChunkPosition chunkPosition) {
+                public Collection<WeakReference<Entity>> get(ChunkPosition chunkPosition) {
                     return entitiesCache.getUnchecked(chunkPosition);
                 }
             };
         } else {
             return new EntitiesCache() {
-                private final Map<ChunkPosition, Collection<Entity>> entitiesCache = new HashMap<>();
+                private final Map<ChunkPosition, Collection<WeakReference<Entity>>> entitiesCache = new HashMap<>();
 
                 @Override
-                public Collection<Entity> get(ChunkPosition chunkPosition) {
+                public Collection<WeakReference<Entity>> get(ChunkPosition chunkPosition) {
                     return entitiesCache.computeIfAbsent(chunkPosition, unused -> new ArrayList<>());
                 }
             };
@@ -100,7 +108,7 @@ public final class EntitiesGetter {
 
     private interface EntitiesCache {
 
-        Collection<Entity> get(ChunkPosition chunkPosition);
+        Collection<WeakReference<Entity>> get(ChunkPosition chunkPosition);
 
     }
 
